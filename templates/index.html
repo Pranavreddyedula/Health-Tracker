@@ -8,11 +8,6 @@
 <body>
     <h1>🏥 Health Tracker</h1>
 
-    <!-- Message box -->
-    {% if message %}
-        <div class="message">{{ message }}</div>
-    {% endif %}
-
     <form method="POST">
         <label>Weight (kg):</label>
         <input type="number" step="0.1" name="weight" required><br>
@@ -30,7 +25,7 @@
     </form>
 
     <h2>📊 Records</h2>
-    <table>
+    <table border="1">
         <tr>
             <th>Date</th>
             <th>Weight</th>
@@ -45,9 +40,9 @@
             <td>{{ r[1] }}</td>
             <td>{{ r[2] }}</td>
             <td>{{ r[3] }}</td>
+            <td>{{ r[6] }}</td>
             <td>{{ r[4] }}</td>
             <td>{{ r[5] }}</td>
-            <td>{{ r[6] }}</td>
             <td style="color:red;">{{ r[7] }}</td>
         </tr>
         {% endfor %}
