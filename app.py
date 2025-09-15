@@ -129,7 +129,7 @@ def download_pdf():
         create_graph(dates, bmis, "BMI", "bmi.png")
         create_graph(dates, sugars, "Sugar (mg/dl)", "sugar.png")
 
-        # Add records and alerts
+        # Add records and alerts (plain text, no Unicode)
         for rec in records:
             pdf.cell(0, 8, f"Date: {rec[1]} | Weight: {rec[2]} kg | Height: {rec[3]} cm | BMI: {rec[4]} | BP: {rec[5]} | Sugar: {rec[6]} mg/dl", 0, 1)
             alerts = []
@@ -147,20 +147,20 @@ def download_pdf():
                 alerts.append("Overweight")
             if alerts:
                 pdf.set_text_color(255, 0, 0)
-                pdf.cell(0, 8, f"⚠ Alerts: {', '.join(alerts)}", 0, 1)
+                pdf.cell(0, 8, f"Alerts: {', '.join(alerts)}", 0, 1)  # ✅ removed ⚠
                 pdf.set_text_color(0, 0, 0)
             pdf.ln(2)
 
         # Add graphs to PDF
         if dates:
             pdf.add_page()
-            pdf.cell(0,10,"📈 Weight Trend",0,1,'C')
+            pdf.cell(0,10,"Weight Trend",0,1,'C')
             pdf.image(os.path.join(GRAPH_DIR,"weight.png"), x=10, y=20, w=180)
             pdf.add_page()
-            pdf.cell(0,10,"📈 BMI Trend",0,1,'C')
+            pdf.cell(0,10,"BMI Trend",0,1,'C')
             pdf.image(os.path.join(GRAPH_DIR,"bmi.png"), x=10, y=20, w=180)
             pdf.add_page()
-            pdf.cell(0,10,"📈 Sugar Trend",0,1,'C')
+            pdf.cell(0,10,"Sugar Trend",0,1,'C')
             pdf.image(os.path.join(GRAPH_DIR,"sugar.png"), x=10, y=20, w=180)
 
         pdf_output = BytesIO()
@@ -174,3 +174,4 @@ def download_pdf():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
