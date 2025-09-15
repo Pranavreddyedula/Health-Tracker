@@ -1,161 +1,153 @@
-import os
-import matplotlib
-matplotlib.use('Agg')  # Headless backend for Render
-import matplotlib.pyplot as plt
 from flask import Flask, render_template, request, send_file
 import sqlite3
 from fpdf import FPDF
 from io import BytesIO
+import os
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # Headless backend for server
+import matplotlib.pyplot as plt
 
+# ---------------- App setup ----------------
 app = Flask(__name__)
 
-BASE_DIR = os.getcwd()
-DB_PATH = os.path.join(BASE_DIR, "health.db")
-GRAPH_DIR = os.path.join(BASE_DIR, "graphs")
+# Ensure graphs folder exists
+GRAPH_DIR = "graphs"
 os.makedirs(GRAPH_DIR, exist_ok=True)
 
+# ---------------- Database setup ----------------
+DB_NAME = "health_data.db"
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS records
-                 (id INTEGER PRIMARY KEY,
-                  date TEXT,
-                  weight REAL,
-                  height REAL,
-                  bmi REAL,
-                  bp TEXT,
-                  sugar REAL)''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            weight REAL,
+            height REAL,
+            bp TEXT,
+            sugar REAL,
+            bmi REAL,
+            alert TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
 init_db()
 
+# ---------------- Helper functions ----------------
+def calculate_bmi(weight, height):
+    height_m = height / 100
+    bmi = weight / (height_m ** 2)
+    return round(bmi, 2)
+
+def determine_alert(bmi):
+    if bmi < 18.5:
+        return "Underweight"
+    elif 18.5 <= bmi < 25:
+        return "Normal"
+    elif 25 <= bmi < 30:
+        return "Overweight"
+    else:
+        return "Obese"
+
+def create_weight_chart(dates, weights, filename="weight_chart.png"):
+    plt.figure(figsize=(6,4))
+    plt.plot(dates, weights, marker='o', color='blue')
+    plt.title("Weight Trend")
+    plt.xlabel("Date")
+    plt.ylabel("Weight (kg)")
+    plt.grid(True)
+    path = os.path.join(GRAPH_DIR, filename)
+    plt.savefig(path)
+    plt.close()
+    return path
+
+# ---------------- Routes ----------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
     message = ""
     if request.method == "POST":
-        try:
-            weight = float(request.form["weight"])
-            height = float(request.form["height"])
-            bp = request.form["bp"]
-            sugar = float(request.form["sugar"])
-            height_m = height / 100
-            bmi = round(weight / (height_m**2), 2)
-            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        weight = float(request.form["weight"])
+        height = float(request.form["height"])
+        bp = request.form["bp"]
+        sugar = float(request.form["sugar"])
+        bmi = calculate_bmi(weight, height)
+        alert = determine_alert(bmi)
 
-            c.execute("INSERT INTO records (date, weight, height, bmi, bp, sugar) VALUES (?, ?, ?, ?, ?, ?)",
-                      (date, weight, height, bmi, bp, sugar))
-            conn.commit()
-            message = "Record added successfully!"
-        except Exception as e:
-            message = f"Error: {str(e)}"
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO records (date, weight, height, bp, sugar, bmi, alert)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), weight, height, bp, sugar, bmi, alert))
+        conn.commit()
+        conn.close()
+        message = "Record added successfully!"
 
-    c.execute("SELECT * FROM records ORDER BY date DESC")
-    records = c.fetchall()
+    # Fetch all records
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT * FROM records")
+    data = c.fetchall()
     conn.close()
 
-    records_with_alerts = []
-    for r in records:
-        alerts = []
-        try:
-            systolic, diastolic = map(int, r[5].split('/'))
-            if systolic > 140 or diastolic > 90:
-                alerts.append("High BP")
-        except:
-            pass
-        if r[6] < 70:
-            alerts.append("Low Sugar")
-        elif r[6] > 140:
-            alerts.append("High Sugar")
-        if r[4] >= 25:
-            alerts.append("Overweight")
-        records_with_alerts.append((r[0], r[1], r[2], r[3], r[5], r[6], r[4], ", ".join(alerts)))
-
-    return render_template("index.html", data=records_with_alerts, message=message)
-
-def create_graph(dates, values, ylabel, filename):
-    if not dates or not values:
-        return
-    dates_dt = [datetime.strptime(d, "%Y-%m-%d %H:%M:%S") for d in dates]
-    plt.figure(figsize=(6,4))
-    plt.plot(dates_dt, values, marker='o', linestyle='-', color='green', label=ylabel)
-    plt.xlabel("Date")
-    plt.ylabel(ylabel)
-    plt.title(f"{ylabel} Trend")
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend()
-    plt.gcf().autofmt_xdate()
-    plt.tight_layout()
-    plt.savefig(os.path.join(GRAPH_DIR, filename))
-    plt.close()
+    return render_template("index.html", data=data, message=message)
 
 @app.route("/download")
 def download_pdf():
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
-        c.execute("SELECT * FROM records ORDER BY date ASC")
-        records = c.fetchall()
+        c.execute("SELECT * FROM records")
+        data = c.fetchall()
         conn.close()
 
+        # Prepare PDF
         pdf = FPDF()
         pdf.add_page()
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, "Health Tracker Report", 0, 1, 'C')
-        pdf.ln(5)
-        pdf.set_font("Arial", '', 12)
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, "Health Tracker Report", ln=True, align="C")
+        pdf.ln(10)
 
-        dates = [r[1] for r in records]
-        weights = [r[2] for r in records]
-        bmis = [r[4] for r in records]
-        sugars = [r[6] for r in records]
+        # Table header
+        pdf.set_font("Arial", "B", 12)
+        headers = ["Date", "Weight", "Height", "BMI", "BP", "Sugar", "Alerts"]
+        for header in headers:
+            pdf.cell(28, 10, header, border=1, align="C")
+        pdf.ln()
 
-        create_graph(dates, weights, "Weight (kg)", "weight.png")
-        create_graph(dates, bmis, "BMI", "bmi.png")
-        create_graph(dates, sugars, "Sugar (mg/dl)", "sugar.png")
+        # Table rows
+        pdf.set_font("Arial", "", 12)
+        for row in data:
+            pdf.cell(28, 10, str(row[1]), border=1, align="C")
+            pdf.cell(28, 10, str(row[2]), border=1, align="C")
+            pdf.cell(28, 10, str(row[3]), border=1, align="C")
+            pdf.cell(28, 10, str(row[6]), border=1, align="C")
+            pdf.cell(28, 10, str(row[4]), border=1, align="C")
+            pdf.cell(28, 10, str(row[5]), border=1, align="C")
+            pdf.cell(28, 10, str(row[7]), border=1, align="C")
+            pdf.ln()
 
-        for rec in records:
-            pdf.cell(0, 8, f"Date: {rec[1]} | Weight: {rec[2]} kg | Height: {rec[3]} cm | BMI: {rec[4]} | BP: {rec[5]} | Sugar: {rec[6]} mg/dl", 0, 1)
-            alerts = []
-            try:
-                systolic, diastolic = map(int, rec[5].split('/'))
-                if systolic > 140 or diastolic > 90:
-                    alerts.append("High BP")
-            except:
-                pass
-            if rec[6] < 70:
-                alerts.append("Low Sugar")
-            elif rec[6] > 140:
-                alerts.append("High Sugar")
-            if rec[4] >= 25:
-                alerts.append("Overweight")
-            if alerts:
-                pdf.set_text_color(255, 0, 0)
-                pdf.cell(0, 8, f"Alerts: {', '.join(alerts)}", 0, 1)
-                pdf.set_text_color(0, 0, 0)
-            pdf.ln(2)
-
-        if dates:
-            pdf.add_page()
-            pdf.cell(0,10,"Weight Trend",0,1,'C')
-            pdf.image(os.path.join(GRAPH_DIR,"weight.png"), x=10, y=20, w=180)
-            pdf.add_page()
-            pdf.cell(0,10,"BMI Trend",0,1,'C')
-            pdf.image(os.path.join(GRAPH_DIR,"bmi.png"), x=10, y=20, w=180)
-            pdf.add_page()
-            pdf.cell(0,10,"Sugar Trend",0,1,'C')
-            pdf.image(os.path.join(GRAPH_DIR,"sugar.png"), x=10, y=20, w=180)
-
+        # Generate weight chart
+        dates = [row[1] for row in data]
+        weights = [row[2] for row in data]
+        if dates and weights:
+            chart_path = create_weight_chart(dates, weights)
+            pdf.image(chart_path, x=30, w=150)
+        
+        # Output PDF
         pdf_output = BytesIO()
         pdf.output(pdf_output)
         pdf_output.seek(0)
         return send_file(pdf_output, download_name="health_report.pdf", as_attachment=True)
-    except Exception as e:
-        return f"Error generating PDF: {str(e)}", 500
 
+    except Exception as e:
+        return f"Error generating PDF: {e}"
+
+# ---------------- Run ----------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True)
