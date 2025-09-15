@@ -1,144 +1,132 @@
 from flask import Flask, render_template, request, send_file
 import sqlite3
 from fpdf import FPDF
+import matplotlib
+matplotlib.use('Agg')  # Prevent GUI issues on Render
 import matplotlib.pyplot as plt
-import io, datetime
+import io
+import tempfile
+import os
+from datetime import datetime
 
 app = Flask(__name__)
 DB_NAME = "health.db"
 
-# ---------------- Database Init ----------------
+# --- Initialize DB ---
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("""
         CREATE TABLE IF NOT EXISTS health (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
             weight REAL,
             height REAL,
-            calories REAL,
-            steps INTEGER
+            bp TEXT,
+            sugar REAL
         )
-    """)
-    conn.commit()
-    conn.close()
+        """)
+        conn.commit()
 
 init_db()
 
-# ---------------- Home ----------------
+# --- Routes ---
 @app.route("/", methods=["GET", "POST"])
 def index():
+    message = ""
     if request.method == "POST":
         try:
-            weight = float(request.form["weight"])
-            height = float(request.form["height"])
-            calories = float(request.form["calories"])
-            steps = int(request.form["steps"])
-            date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            weight = float(request.form.get("weight", "").strip())
+            height = float(request.form.get("height", "").strip())
+            bp = request.form.get("bp", "").strip()
+            sugar = float(request.form.get("sugar", "").strip())
+            
+            if not bp:
+                raise ValueError("Blood Pressure is required")
 
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO health (date, weight, height, calories, steps) VALUES (?,?,?,?,?)",
-                (date, weight, height, calories, steps)
-            )
-            conn.commit()
-            conn.close()
+            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with sqlite3.connect(DB_NAME) as conn:
+                c = conn.cursor()
+                c.execute(
+                    "INSERT INTO health (date, weight, height, bp, sugar) VALUES (?, ?, ?, ?, ?)",
+                    (date, weight, height, bp, sugar)
+                )
+                conn.commit()
+            message = "Record added successfully!"
         except Exception as e:
-            return f"Error saving data: {e}"
+            message = f"Error saving data: {e}"
 
-    return render_template("index.html")
+    # Fetch all records
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM health ORDER BY date DESC")
+        data = c.fetchall()
 
-# ---------------- Generate PDF ----------------
+    return render_template("index.html", data=data, message=message)
+
 @app.route("/download")
 def download_pdf():
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("SELECT date, weight, height, calories, steps FROM health")
-        rows = cursor.fetchall()
-        conn.close()
-    except Exception as e:
-        return f"Database error: {e}"
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("SELECT date, weight, height, bp, sugar FROM health ORDER BY date")
+        records = c.fetchall()
 
-    if not rows:
-        return "⚠️ No health data available!"
+    if not records:
+        return "No records found!"
 
-    try:
-        # Create PDF
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", "B", 16)
-        pdf.cell(200, 10, "🏥 Health Progress Report", ln=True, align="C")
-        pdf.ln(5)
+    # --- Generate weight graph ---
+    dates = [r[0] for r in records]
+    weights = [r[1] for r in records]
 
-        # Table
-        pdf.set_font("Arial", size=10)
-        for row in rows:
-            pdf.multi_cell(
-                0, 8,
-                f"Date: {row[0]} | Weight: {row[1]} kg | Height: {row[2]} m | Calories: {row[3]} | Steps: {row[4]}"
-            )
+    plt.figure(figsize=(6, 4))
+    plt.plot(dates, weights, marker="o", label="Weight Progress")
+    plt.xticks(rotation=30, ha="right")
+    plt.ylabel("Weight (kg)")
+    plt.xlabel("Date")
+    plt.legend()
+    plt.tight_layout()
 
-        # Graphs
-        dates = [r[0] for r in rows]
-        weights = [r[1] for r in rows]
-        calories = [r[3] for r in rows]
-        steps = [r[4] for r in rows]
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    plt.savefig(tmp_file.name)
+    plt.close()
 
-        def add_graph(data, label):
-            plt.figure()
-            plt.plot(dates, data, marker="o")
-            plt.xticks(rotation=45, fontsize=6)
-            plt.title(label)
-            plt.tight_layout()
-            img = io.BytesIO()
-            plt.savefig(img, format="png")
-            img.seek(0)
-            pdf.image(img, x=10, w=180)
-            plt.close()
+    # --- Create PDF ---
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Health Progress Report", ln=True, align="C")
 
-        add_graph(weights, "Weight (kg)")
-        add_graph(calories, "Calories")
-        add_graph(steps, "Steps")
+    pdf.set_font("Arial", size=12)
+    pdf.ln(5)
+    for r in records:
+        pdf.cell(
+            0, 10,
+            f"Date: {r[0]} | Weight: {r[1]}kg | Height: {r[2]}cm | BP: {r[3]} | Sugar: {r[4]}mg/dl",
+            ln=True
+        )
 
-        # Suggestions
-        pdf.set_font("Arial", "B", 14)
-        pdf.ln(10)
-        pdf.cell(200, 10, "💡 Health Suggestions", ln=True)
+    pdf.ln(10)
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Health Suggestions:", ln=True)
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(
+        0, 10,
+        "- Maintain a balanced diet with vegetables, fruits, and proteins.\n"
+        "- Exercise at least 30 minutes daily.\n"
+        "- Drink enough water.\n"
+        "- Reduce sugar and junk food.\n"
+        "- Monitor blood pressure and sugar levels regularly."
+    )
 
-        last_weight, last_calories, last_steps = weights[-1], calories[-1], steps[-1]
-        suggestions = []
+    # Add graph image
+    pdf.image(tmp_file.name, x=40, w=120)
+    os.remove(tmp_file.name)
 
-        if last_weight > 80:
-            suggestions.append("⚠️ Try reducing weight with balanced diet & daily exercise.")
-        elif last_weight < 50:
-            suggestions.append("🍲 You may need a calorie surplus diet to gain weight.")
-        else:
-            suggestions.append("✅ Your weight is in a healthy range. Maintain it!")
+    pdf_bytes = pdf.output(dest="S").encode("latin1")
+    return send_file(io.BytesIO(pdf_bytes),
+                     download_name="Health_Report.pdf",
+                     as_attachment=True)
 
-        if last_calories > 3000:
-            suggestions.append("⚠️ Reduce high-calorie intake, focus on proteins & fibers.")
-        elif last_calories < 1500:
-            suggestions.append("🍎 Increase calories with healthy foods like nuts & fruits.")
-
-        if last_steps < 5000:
-            suggestions.append("🚶 Aim for at least 8,000–10,000 steps per day.")
-
-        pdf.set_font("Arial", size=12)
-        for s in suggestions:
-            pdf.multi_cell(0, 8, s)
-
-        # Output PDF
-        output = io.BytesIO()
-        pdf.output(output)
-        output.seek(0)
-        return send_file(output, as_attachment=True, download_name="Health_Report.pdf", mimetype="application/pdf")
-
-    except Exception as e:
-        return f"PDF generation error: {e}"
-
-# ---------------- Run ----------------
+# --- Run locally ---
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
