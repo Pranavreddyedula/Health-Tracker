@@ -1,0 +1,23 @@
+import os
+import matplotlib
+matplotlib.use('Agg')  # Use headless backend for servers
+import matplotlib.pyplot as plt
+
+# Create the folder if it doesn't exist
+GRAPH_DIR = "graphs"
+os.makedirs(GRAPH_DIR, exist_ok=True)
+
+# Example function to generate a chart
+def create_weight_chart(dates, weights, filename="weight_chart.png"):
+    plt.figure(figsize=(6,4))
+    plt.plot(dates, weights, marker='o', color='blue')
+    plt.title("Weight Trend")
+    plt.xlabel("Date")
+    plt.ylabel("Weight (kg)")
+    plt.grid(True)
+    
+    # Save the chart in the graphs folder
+    path = os.path.join(GRAPH_DIR, filename)
+    plt.savefig(path)
+    plt.close()
+    return path
