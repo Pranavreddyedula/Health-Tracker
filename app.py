@@ -36,20 +36,34 @@ def index():
         height = float(request.form["height"])
         bp = request.form["bp"]
         sugar = float(request.form["sugar"])
-
         height_m = height / 100
         bmi = round(weight / (height_m**2), 2)
-
         date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         c.execute("INSERT INTO records (date, weight, height, bmi, bp, sugar) VALUES (?, ?, ?, ?, ?, ?)",
                   (date, weight, height, bmi, bp, sugar))
         conn.commit()
 
-    c.execute("SELECT * FROM records ORDER BY date ASC")
+    c.execute("SELECT * FROM records ORDER BY date DESC")
     records = c.fetchall()
     conn.close()
 
-    return render_template("index.html", records=records)
+    # Add alerts for each record
+    records_with_alerts = []
+    for r in records:
+        alerts = []
+        systolic, diastolic = map(int, r[5].split('/'))
+        if systolic > 140 or diastolic > 90:
+            alerts.append("High BP")
+        if r[6] < 70:
+            alerts.append("Low Sugar")
+        elif r[6] > 140:
+            alerts.append("High Sugar")
+        if r[4] >= 25:
+            alerts.append("Overweight")
+        records_with_alerts.append((r[0], r[1], r[2], r[3], r[5], r[6], r[4], ", ".join(alerts)))
+
+    return render_template("index.html", data=records_with_alerts)
 
 # ---------------- Fancy Graph Function ----------------
 def create_fancy_graph(dates, y_values, ylabel, filename, thresholds=None):
@@ -73,7 +87,7 @@ def create_fancy_graph(dates, y_values, ylabel, filename, thresholds=None):
     plt.close()
 
 # ---------------- PDF Download ----------------
-@app.route("/download_pdf")
+@app.route("/download")
 def download_pdf():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -95,7 +109,7 @@ def download_pdf():
     sugars = [r[6] for r in records]
 
     # Generate fancy graphs
-    create_fancy_graph(weights, weights, "Weight (kg)", "weight.png", thresholds={'low': 40, 'high': 80})
+    create_fancy_graph(dates, weights, "Weight (kg)", "weight.png", thresholds={'low': 40, 'high': 80})
     create_fancy_graph(dates, bmis, "BMI", "bmi.png", thresholds={'low': 18.5, 'high': 25})
     create_fancy_graph(dates, sugars, "Sugar (mg/dl)", "sugar.png", thresholds={'low': 70, 'high': 140})
 
@@ -136,5 +150,6 @@ def download_pdf():
     pdf_output.seek(0)
     return send_file(pdf_output, download_name="health_report.pdf", as_attachment=True)
 
+# ---------------- Run App ----------------
 if __name__ == "__main__":
     app.run(debug=True)
