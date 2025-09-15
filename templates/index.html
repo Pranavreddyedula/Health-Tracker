@@ -3,11 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <title>Health Tracker</title>
-    <!-- Link to CSS -->
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <h1>🏥 Health Tracker</h1>
+
+    <!-- Message box -->
+    {% if message %}
+        <div class="message">{{ message }}</div>
+    {% endif %}
 
     <form method="POST">
         <label>Weight (kg):</label>
@@ -49,5 +53,3 @@
     <a href="/download"><button type="button">📥 Download PDF Report</button></a>
 </body>
 </html>
-
-
