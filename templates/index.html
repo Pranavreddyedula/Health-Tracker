@@ -35,8 +35,10 @@
             <th>Date</th>
             <th>Weight</th>
             <th>Height</th>
+            <th>BMI</th>
             <th>BP</th>
             <th>Sugar</th>
+            <th>Alerts</th>
         </tr>
         {% for r in data %}
         <tr>
@@ -45,6 +47,8 @@
             <td>{{ r[3] }}</td>
             <td>{{ r[4] }}</td>
             <td>{{ r[5] }}</td>
+            <td>{{ r[6] }}</td>
+            <td style="color:red;">{{ r[7] }}</td>
         </tr>
         {% endfor %}
     </table>
