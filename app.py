@@ -12,10 +12,11 @@ app = Flask(__name__)
 # Base directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GRAPH_DIR = os.path.join(BASE_DIR, "graphs")
+FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 
-# Safe creation of graphs directory
-if not os.path.exists(GRAPH_DIR):
-    os.makedirs(GRAPH_DIR)
+# Safe creation of directories
+os.makedirs(GRAPH_DIR, exist_ok=True)
+os.makedirs(FONTS_DIR, exist_ok=True)
 
 # Database setup
 DB_PATH = os.path.join(BASE_DIR, "health.db")
@@ -99,7 +100,13 @@ def download():
 
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
+
+    # Use Unicode font
+    font_path = os.path.join(FONTS_DIR, "DejaVuSans.ttf")
+    if not os.path.exists(font_path):
+        return "Font not found! Please add DejaVuSans.ttf in the fonts/ folder."
+    pdf.add_font("DejaVu", "", font_path, uni=True)
+    pdf.set_font("DejaVu", size=12)
 
     pdf.cell(0, 10, "Health Tracker Report", ln=True, align="C")
     pdf.ln(5)
@@ -119,7 +126,7 @@ def download():
     # Generate graph and add to PDF
     graph_path = generate_graph(data)
     if graph_path:
-        pdf.image(graph_path, x=10, y=None, w=pdf.w - 20)
+        pdf.image(graph_path, x=10, w=pdf.w - 20)
 
     pdf_buffer = BytesIO()
     pdf.output(pdf_buffer)
