@@ -1,16 +1,26 @@
+import os
+import matplotlib
+matplotlib.use('Agg')  # Headless backend for Render
+import matplotlib.pyplot as plt
 from flask import Flask, render_template, request, send_file
 import sqlite3
 from fpdf import FPDF
 from io import BytesIO
 from datetime import datetime
-import matplotlib.pyplot as plt
 
 app = Flask(__name__)
-DB_NAME = "health.db"
+
+# ---------------- Paths ----------------
+BASE_DIR = os.getcwd()
+DB_PATH = os.path.join(BASE_DIR, "health.db")
+GRAPH_DIR = os.path.join(BASE_DIR, "graphs")
+
+# Ensure graph directory exists
+os.makedirs(GRAPH_DIR, exist_ok=True)
 
 # ---------------- Database Setup ----------------
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS records
                  (id INTEGER PRIMARY KEY,
@@ -28,21 +38,24 @@ init_db()
 # ---------------- Routes ----------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     if request.method == "POST":
-        weight = float(request.form["weight"])
-        height = float(request.form["height"])
-        bp = request.form["bp"]
-        sugar = float(request.form["sugar"])
-        height_m = height / 100
-        bmi = round(weight / (height_m**2), 2)
-        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            weight = float(request.form["weight"])
+            height = float(request.form["height"])
+            bp = request.form["bp"]
+            sugar = float(request.form["sugar"])
+            height_m = height / 100
+            bmi = round(weight / (height_m**2), 2)
+            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        c.execute("INSERT INTO records (date, weight, height, bmi, bp, sugar) VALUES (?, ?, ?, ?, ?, ?)",
-                  (date, weight, height, bmi, bp, sugar))
-        conn.commit()
+            c.execute("INSERT INTO records (date, weight, height, bmi, bp, sugar) VALUES (?, ?, ?, ?, ?, ?)",
+                      (date, weight, height, bmi, bp, sugar))
+            conn.commit()
+        except Exception as e:
+            print("Error inserting record:", e)
 
     c.execute("SELECT * FROM records ORDER BY date DESC")
     records = c.fetchall()
@@ -52,9 +65,12 @@ def index():
     records_with_alerts = []
     for r in records:
         alerts = []
-        systolic, diastolic = map(int, r[5].split('/'))
-        if systolic > 140 or diastolic > 90:
-            alerts.append("High BP")
+        try:
+            systolic, diastolic = map(int, r[5].split('/'))
+            if systolic > 140 or diastolic > 90:
+                alerts.append("High BP")
+        except:
+            pass
         if r[6] < 70:
             alerts.append("Low Sugar")
         elif r[6] > 140:
@@ -65,31 +81,32 @@ def index():
 
     return render_template("index.html", data=records_with_alerts)
 
-# ---------------- Fancy Graph Function ----------------
-def create_fancy_graph(dates, y_values, ylabel, filename, thresholds=None):
-    dates_dt = [datetime.strptime(d, "%Y-%m-%d %H:%M:%S") for d in dates]
-    plt.figure(figsize=(6,4))
-    plt.plot(dates_dt, y_values, marker='o', linestyle='-', color='green', label=ylabel)
-
-    if thresholds:
-        for i, val in enumerate(y_values):
-            if val < thresholds.get('low', float('-inf')) or val > thresholds.get('high', float('inf')):
-                plt.plot(dates_dt[i], val, marker='o', color='red', markersize=10)  # alert
-
-    plt.xlabel("Date")
-    plt.ylabel(ylabel)
-    plt.title(f"{ylabel} Trend")
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend()
-    plt.gcf().autofmt_xdate()
-    plt.tight_layout()
-    plt.savefig(filename)
-    plt.close()
+# ---------------- Graph Function ----------------
+def create_graph(dates, values, ylabel, filename, thresholds=None):
+    try:
+        dates_dt = [datetime.strptime(d, "%Y-%m-%d %H:%M:%S") for d in dates]
+        plt.figure(figsize=(6,4))
+        plt.plot(dates_dt, values, marker='o', linestyle='-', color='green', label=ylabel)
+        if thresholds:
+            for i, val in enumerate(values):
+                if val < thresholds.get('low', float('-inf')) or val > thresholds.get('high', float('inf')):
+                    plt.plot(dates_dt[i], val, marker='o', color='red', markersize=10)
+        plt.xlabel("Date")
+        plt.ylabel(ylabel)
+        plt.title(f"{ylabel} Trend")
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.legend()
+        plt.gcf().autofmt_xdate()
+        plt.tight_layout()
+        plt.savefig(os.path.join(GRAPH_DIR, filename))
+        plt.close()
+    except Exception as e:
+        print("Graph generation error:", e)
 
 # ---------------- PDF Download ----------------
 @app.route("/download")
 def download_pdf():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT * FROM records ORDER BY date ASC")
     records = c.fetchall()
@@ -108,18 +125,21 @@ def download_pdf():
     bmis = [r[4] for r in records]
     sugars = [r[6] for r in records]
 
-    # Generate fancy graphs
-    create_fancy_graph(dates, weights, "Weight (kg)", "weight.png", thresholds={'low': 40, 'high': 80})
-    create_fancy_graph(dates, bmis, "BMI", "bmi.png", thresholds={'low': 18.5, 'high': 25})
-    create_fancy_graph(dates, sugars, "Sugar (mg/dl)", "sugar.png", thresholds={'low': 70, 'high': 140})
+    # Create graphs
+    create_graph(dates, weights, "Weight (kg)", "weight.png", thresholds={'low':40,'high':80})
+    create_graph(dates, bmis, "BMI", "bmi.png", thresholds={'low':18.5,'high':25})
+    create_graph(dates, sugars, "Sugar (mg/dl)", "sugar.png", thresholds={'low':70,'high':140})
 
-    # Add records with alerts
+    # Add records and alerts
     for rec in records:
         pdf.cell(0, 8, f"Date: {rec[1]} | Weight: {rec[2]} kg | Height: {rec[3]} cm | BMI: {rec[4]} | BP: {rec[5]} | Sugar: {rec[6]} mg/dl", 0, 1)
         alerts = []
-        systolic, diastolic = map(int, rec[5].split('/'))
-        if systolic > 140 or diastolic > 90:
-            alerts.append("High BP")
+        try:
+            systolic, diastolic = map(int, rec[5].split('/'))
+            if systolic > 140 or diastolic > 90:
+                alerts.append("High BP")
+        except:
+            pass
         if rec[6] < 70:
             alerts.append("Low Sugar")
         elif rec[6] > 140:
@@ -132,18 +152,16 @@ def download_pdf():
             pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
 
-    # Add fancy graphs to PDF
+    # Add graphs to PDF
     pdf.add_page()
-    pdf.cell(0, 10, "📈 Weight Trend", 0, 1, 'C')
-    pdf.image("weight.png", x=10, y=20, w=180)
-
+    pdf.cell(0,10,"📈 Weight Trend",0,1,'C')
+    pdf.image(os.path.join(GRAPH_DIR,"weight.png"), x=10, y=20, w=180)
     pdf.add_page()
-    pdf.cell(0, 10, "📈 BMI Trend", 0, 1, 'C')
-    pdf.image("bmi.png", x=10, y=20, w=180)
-
+    pdf.cell(0,10,"📈 BMI Trend",0,1,'C')
+    pdf.image(os.path.join(GRAPH_DIR,"bmi.png"), x=10, y=20, w=180)
     pdf.add_page()
-    pdf.cell(0, 10, "📈 Sugar Trend", 0, 1, 'C')
-    pdf.image("sugar.png", x=10, y=20, w=180)
+    pdf.cell(0,10,"📈 Sugar Trend",0,1,'C')
+    pdf.image(os.path.join(GRAPH_DIR,"sugar.png"), x=10, y=20, w=180)
 
     pdf_output = BytesIO()
     pdf.output(pdf_output)
@@ -152,4 +170,5 @@ def download_pdf():
 
 # ---------------- Run App ----------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
