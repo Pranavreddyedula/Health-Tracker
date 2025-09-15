@@ -1,132 +1,140 @@
 from flask import Flask, render_template, request, send_file
 import sqlite3
 from fpdf import FPDF
-import matplotlib
-matplotlib.use('Agg')  # Prevent GUI issues on Render
-import matplotlib.pyplot as plt
-import io
-import tempfile
-import os
+from io import BytesIO
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 DB_NAME = "health.db"
 
-# --- Initialize DB ---
+# ---------------- Database Setup ----------------
 def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS health (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            weight REAL,
-            height REAL,
-            bp TEXT,
-            sugar REAL
-        )
-        """)
-        conn.commit()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS records
+                 (id INTEGER PRIMARY KEY,
+                  date TEXT,
+                  weight REAL,
+                  height REAL,
+                  bmi REAL,
+                  bp TEXT,
+                  sugar REAL)''')
+    conn.commit()
+    conn.close()
 
 init_db()
 
-# --- Routes ---
+# ---------------- Routes ----------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    message = ""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
     if request.method == "POST":
-        try:
-            weight = float(request.form.get("weight", "").strip())
-            height = float(request.form.get("height", "").strip())
-            bp = request.form.get("bp", "").strip()
-            sugar = float(request.form.get("sugar", "").strip())
-            
-            if not bp:
-                raise ValueError("Blood Pressure is required")
+        weight = float(request.form["weight"])
+        height = float(request.form["height"])
+        bp = request.form["bp"]
+        sugar = float(request.form["sugar"])
 
-            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                c.execute(
-                    "INSERT INTO health (date, weight, height, bp, sugar) VALUES (?, ?, ?, ?, ?)",
-                    (date, weight, height, bp, sugar)
-                )
-                conn.commit()
-            message = "Record added successfully!"
-        except Exception as e:
-            message = f"Error saving data: {e}"
+        height_m = height / 100
+        bmi = round(weight / (height_m**2), 2)
 
-    # Fetch all records
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT * FROM health ORDER BY date DESC")
-        data = c.fetchall()
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO records (date, weight, height, bmi, bp, sugar) VALUES (?, ?, ?, ?, ?, ?)",
+                  (date, weight, height, bmi, bp, sugar))
+        conn.commit()
 
-    return render_template("index.html", data=data, message=message)
+    c.execute("SELECT * FROM records ORDER BY date ASC")
+    records = c.fetchall()
+    conn.close()
 
-@app.route("/download")
-def download_pdf():
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT date, weight, height, bp, sugar FROM health ORDER BY date")
-        records = c.fetchall()
+    return render_template("index.html", records=records)
 
-    if not records:
-        return "No records found!"
+# ---------------- Fancy Graph Function ----------------
+def create_fancy_graph(dates, y_values, ylabel, filename, thresholds=None):
+    dates_dt = [datetime.strptime(d, "%Y-%m-%d %H:%M:%S") for d in dates]
+    plt.figure(figsize=(6,4))
+    plt.plot(dates_dt, y_values, marker='o', linestyle='-', color='green', label=ylabel)
 
-    # --- Generate weight graph ---
-    dates = [r[0] for r in records]
-    weights = [r[1] for r in records]
+    if thresholds:
+        for i, val in enumerate(y_values):
+            if val < thresholds.get('low', float('-inf')) or val > thresholds.get('high', float('inf')):
+                plt.plot(dates_dt[i], val, marker='o', color='red', markersize=10)  # alert
 
-    plt.figure(figsize=(6, 4))
-    plt.plot(dates, weights, marker="o", label="Weight Progress")
-    plt.xticks(rotation=30, ha="right")
-    plt.ylabel("Weight (kg)")
     plt.xlabel("Date")
+    plt.ylabel(ylabel)
+    plt.title(f"{ylabel} Trend")
+    plt.grid(True, linestyle='--', alpha=0.5)
     plt.legend()
+    plt.gcf().autofmt_xdate()
     plt.tight_layout()
-
-    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    plt.savefig(tmp_file.name)
+    plt.savefig(filename)
     plt.close()
 
-    # --- Create PDF ---
+# ---------------- PDF Download ----------------
+@app.route("/download_pdf")
+def download_pdf():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT * FROM records ORDER BY date ASC")
+    records = c.fetchall()
+    conn.close()
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Health Progress Report", ln=True, align="C")
-
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "Health Tracker Report", 0, 1, 'C')
     pdf.ln(5)
-    for r in records:
-        pdf.cell(
-            0, 10,
-            f"Date: {r[0]} | Weight: {r[1]}kg | Height: {r[2]}cm | BP: {r[3]} | Sugar: {r[4]}mg/dl",
-            ln=True
-        )
+    pdf.set_font("Arial", '', 12)
 
-    pdf.ln(10)
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "Health Suggestions:", ln=True)
-    pdf.set_font("Arial", size=12)
-    pdf.multi_cell(
-        0, 10,
-        "- Maintain a balanced diet with vegetables, fruits, and proteins.\n"
-        "- Exercise at least 30 minutes daily.\n"
-        "- Drink enough water.\n"
-        "- Reduce sugar and junk food.\n"
-        "- Monitor blood pressure and sugar levels regularly."
-    )
+    # Extract data for graphs
+    dates = [r[1] for r in records]
+    weights = [r[2] for r in records]
+    bmis = [r[4] for r in records]
+    sugars = [r[6] for r in records]
 
-    # Add graph image
-    pdf.image(tmp_file.name, x=40, w=120)
-    os.remove(tmp_file.name)
+    # Generate fancy graphs
+    create_fancy_graph(weights, weights, "Weight (kg)", "weight.png", thresholds={'low': 40, 'high': 80})
+    create_fancy_graph(dates, bmis, "BMI", "bmi.png", thresholds={'low': 18.5, 'high': 25})
+    create_fancy_graph(dates, sugars, "Sugar (mg/dl)", "sugar.png", thresholds={'low': 70, 'high': 140})
 
-    pdf_bytes = pdf.output(dest="S").encode("latin1")
-    return send_file(io.BytesIO(pdf_bytes),
-                     download_name="Health_Report.pdf",
-                     as_attachment=True)
+    # Add records with alerts
+    for rec in records:
+        pdf.cell(0, 8, f"Date: {rec[1]} | Weight: {rec[2]} kg | Height: {rec[3]} cm | BMI: {rec[4]} | BP: {rec[5]} | Sugar: {rec[6]} mg/dl", 0, 1)
+        alerts = []
+        systolic, diastolic = map(int, rec[5].split('/'))
+        if systolic > 140 or diastolic > 90:
+            alerts.append("High BP")
+        if rec[6] < 70:
+            alerts.append("Low Sugar")
+        elif rec[6] > 140:
+            alerts.append("High Sugar")
+        if rec[4] >= 25:
+            alerts.append("Overweight")
+        if alerts:
+            pdf.set_text_color(255, 0, 0)
+            pdf.cell(0, 8, f"⚠ Alerts: {', '.join(alerts)}", 0, 1)
+            pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
 
-# --- Run locally ---
+    # Add fancy graphs to PDF
+    pdf.add_page()
+    pdf.cell(0, 10, "📈 Weight Trend", 0, 1, 'C')
+    pdf.image("weight.png", x=10, y=20, w=180)
+
+    pdf.add_page()
+    pdf.cell(0, 10, "📈 BMI Trend", 0, 1, 'C')
+    pdf.image("bmi.png", x=10, y=20, w=180)
+
+    pdf.add_page()
+    pdf.cell(0, 10, "📈 Sugar Trend", 0, 1, 'C')
+    pdf.image("sugar.png", x=10, y=20, w=180)
+
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return send_file(pdf_output, download_name="health_report.pdf", as_attachment=True)
+
 if __name__ == "__main__":
     app.run(debug=True)
