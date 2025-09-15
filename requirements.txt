@@ -1,4 +1,4 @@
-flask
-fpdf
-matplotlib
-gunicorn
+Flask==3.1.2
+fpdf==1.7.2
+matplotlib==3.10.6
+gunicorn==23.0.0
